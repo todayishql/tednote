@@ -4,6 +4,7 @@ import { SidebarItem } from './components/SidebarItem';
 import { Editor } from './components/Editor';
 import { Icon } from './components/Icon';
 import { Button } from './components/Button';
+import { storage, StorageConfig } from './services/storage';
 
 // Initial dummy data
 const INITIAL_NOTES: Note[] = [
@@ -36,29 +37,84 @@ const INITIAL_NOTES: Note[] = [
   },
 ];
 
-const App: React.FC = () => {
-  const [notes, setNotes] = useState<Note[]>(() => {
-    try {
-      const saved = localStorage.getItem('texnote-notes');
-      return saved ? JSON.parse(saved) : INITIAL_NOTES;
-    } catch (e) {
-      console.error("Failed to parse notes from local storage", e);
-      return INITIAL_NOTES;
-    }
-  });
-  
-  const [selectedNoteId, setSelectedNoteId] = useState<string | null>(notes[0]?.id || null);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+type SyncStatus = 'idle' | 'syncing' | 'saved' | 'error';
 
-  // Persist to local storage
+const App: React.FC = () => {
+  // Storage Config State
+  const [config, setConfig] = useState<StorageConfig>(() => {
+    const saved = localStorage.getItem('texnote-config');
+    return saved ? JSON.parse(saved) : { apiUrl: '', apiKey: '' };
+  });
+  const [showSettings, setShowSettings] = useState(false);
+
+  // Data State
+  const [notes, setNotes] = useState<Note[]>(INITIAL_NOTES);
+  const [isLoading, setIsLoading] = useState(true);
+  
+  // Sync Status State
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle');
+  const [lastSynced, setLastSynced] = useState<number | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+
+  // Initial Load
   useEffect(() => {
-    try {
-      localStorage.setItem('texnote-notes', JSON.stringify(notes));
-    } catch (e) {
-      console.error("Failed to save notes", e);
-    }
-  }, [notes]);
+    const initLoad = async () => {
+      setIsLoading(true);
+      try {
+        const loadedNotes = await storage.load(config);
+        if (loadedNotes) {
+          setNotes(loadedNotes);
+          if (loadedNotes.length > 0 && !selectedNoteId) {
+             setSelectedNoteId(loadedNotes[0].id);
+          }
+        } else {
+             // Fallback to initial if nothing loaded anywhere
+             setSelectedNoteId(INITIAL_NOTES[0].id);
+        }
+      } catch (e) {
+        console.error("Load failed", e);
+        // Even if backend fails, we might have local data from storage.load fallback, 
+        // but if that fails too, we keep INITIAL_NOTES
+        setErrorMessage("Failed to load notes from backend. Using offline mode.");
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    initLoad();
+  }, [config.apiUrl]); // Reload if API URL changes
+
+  // Save / Sync Logic (Debounced)
+  useEffect(() => {
+    if (isLoading) return; // Don't save while initial loading
+
+    setSyncStatus('syncing');
+    setErrorMessage(null);
+
+    const timer = setTimeout(async () => {
+      try {
+        await storage.save(notes, config);
+        setSyncStatus('saved');
+        setLastSynced(Date.now());
+      } catch (e) {
+        console.error(e);
+        setSyncStatus('error');
+        setErrorMessage("Sync failed. Data saved locally.");
+      }
+    }, 1000); // 1 second debounce
+
+    return () => clearTimeout(timer);
+  }, [notes, config, isLoading]);
+
+
+  // Update config wrapper
+  const handleSaveConfig = (newConfig: StorageConfig) => {
+    setConfig(newConfig);
+    localStorage.setItem('texnote-config', JSON.stringify(newConfig));
+    setShowSettings(false);
+  };
 
   // Convert flat list to tree
   const noteTree = useMemo(() => {
@@ -93,14 +149,11 @@ const App: React.FC = () => {
     };
 
     setNotes(prev => [newNote, ...prev]);
-    
-    // If we're adding a child, ensure parent is expanded
     if (parentId) {
       setNotes(prev => prev.map(n => 
         n.id === parentId ? { ...n, isExpanded: true } : n
       ));
     }
-    
     setSelectedNoteId(newNote.id);
   };
 
@@ -111,16 +164,12 @@ const App: React.FC = () => {
   };
 
   const handleDeleteNote = (id: string) => {
-    // Helper to get all descendant IDs to delete recursively
     const getDescendants = (rootId: string): string[] => {
       const children = notes.filter(n => n.parentId === rootId);
       return [rootId, ...children.flatMap(c => getDescendants(c.id))];
     };
-
     const idsToDelete = new Set(getDescendants(id));
-    
     setNotes(prev => prev.filter(n => !idsToDelete.has(n.id)));
-    
     if (selectedNoteId && idsToDelete.has(selectedNoteId)) {
       setSelectedNoteId(null);
     }
@@ -132,8 +181,7 @@ const App: React.FC = () => {
     ));
   };
 
-  // --- Import / Export ---
-
+  // --- Import / Export Handlers ---
   const handleExport = () => {
     const dataStr = JSON.stringify(notes, null, 2);
     const blob = new Blob([dataStr], { type: "application/json" });
@@ -150,27 +198,25 @@ const App: React.FC = () => {
   const handleImport = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
-
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
         const content = e.target?.result as string;
         const parsed = JSON.parse(content);
-        if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].id && parsed[0].content !== undefined) {
-            if (window.confirm(`This will overwrite your current ${notes.length} notes with ${parsed.length} notes from the backup. Are you sure?`)) {
+        if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].id) {
+            if (window.confirm(`Overwrite ${notes.length} notes with backup?`)) {
                 setNotes(parsed);
                 setSelectedNoteId(parsed[0].id);
             }
         } else {
-            alert("Invalid backup file format. Expected a list of notes.");
+            alert("Invalid backup file.");
         }
       } catch (err) {
         console.error(err);
-        alert("Failed to parse backup file.");
+        alert("Failed to parse file.");
       }
     };
     reader.readAsText(file);
-    // Reset value so same file can be selected again
     event.target.value = '';
   };
 
@@ -189,13 +235,23 @@ const App: React.FC = () => {
             <Icon name="BookOpen" className="text-indigo-600" />
             TexNote
           </div>
-          <Button size="icon" variant="ghost" onClick={() => handleCreateNote(null)} title="New Notebook">
-            <Icon name="PlusCircle" />
-          </Button>
+          <div className="flex gap-1">
+             <Button size="icon" variant="ghost" onClick={() => setShowSettings(true)} title="Settings">
+               <Icon name="Settings" size={18} />
+             </Button>
+             <Button size="icon" variant="ghost" onClick={() => handleCreateNote(null)} title="New Notebook">
+               <Icon name="PlusCircle" />
+             </Button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-2">
-          {noteTree.length === 0 ? (
+          {isLoading ? (
+             <div className="flex flex-col items-center justify-center mt-10 text-slate-400 gap-2">
+                <Icon name="Loader2" className="animate-spin" />
+                <span className="text-xs">Loading notebooks...</span>
+             </div>
+          ) : noteTree.length === 0 ? (
             <div className="text-center text-slate-400 mt-10 text-sm px-4">
               <p className="mb-2">No notebooks yet.</p>
               <Button size="sm" variant="secondary" onClick={() => handleCreateNote(null)}>Create One</Button>
@@ -215,17 +271,32 @@ const App: React.FC = () => {
           )}
         </div>
         
-        {/* Storage / Footer */}
-        <div className="p-4 border-t border-slate-200 bg-slate-50/50">
-          <div className="flex items-center justify-between mb-2">
-             <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Backup & Restore</span>
-             <span className="text-xs text-slate-400">{notes.length} notes</span>
+        {/* Footer */}
+        <div className="p-3 border-t border-slate-200 bg-slate-50/50 flex flex-col gap-3">
+          {/* Sync Status Indicator */}
+          <div className="flex items-center justify-between text-xs px-1">
+             <div className="flex items-center gap-1.5">
+                {syncStatus === 'syncing' && <Icon name="Loader2" className="animate-spin text-indigo-500" size={12} />}
+                {syncStatus === 'saved' && <Icon name="CheckCircle" className="text-green-500" size={12} />}
+                {syncStatus === 'error' && <Icon name="AlertCircle" className="text-red-500" size={12} />}
+                {syncStatus === 'idle' && <Icon name="Cloud" className="text-slate-400" size={12} />}
+                
+                <span className={`${syncStatus === 'error' ? 'text-red-500' : 'text-slate-500'}`}>
+                  {syncStatus === 'syncing' && 'Syncing...'}
+                  {syncStatus === 'saved' && 'All changes saved'}
+                  {syncStatus === 'error' && 'Sync failed (Saved locally)'}
+                  {syncStatus === 'idle' && 'Offline'}
+                </span>
+             </div>
+             {config.apiUrl && (
+                 <span className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">Backend Active</span>
+             )}
           </div>
+
           <div className="flex gap-2">
             <Button variant="secondary" size="sm" className="flex-1 h-8 text-xs" onClick={handleExport} title="Download backup file">
               <Icon name="Download" size={14} className="mr-2" /> Export
             </Button>
-            
             <div className="relative flex-1">
                 <input 
                     type="file" 
@@ -244,7 +315,6 @@ const App: React.FC = () => {
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col h-full min-w-0 bg-white shadow-xl z-0 relative">
-        {/* Toggle Sidebar Button (visible when sidebar closed or mobile) */}
         {!isSidebarOpen && (
            <div className="absolute top-4 left-4 z-20">
              <Button variant="secondary" size="icon" onClick={() => setIsSidebarOpen(true)}>
@@ -252,8 +322,6 @@ const App: React.FC = () => {
              </Button>
            </div>
         )}
-
-        {/* Floating toggle for desktop convenience when open */}
         {isSidebarOpen && (
            <div className="absolute top-1/2 -left-3 z-20 hidden md:block group">
              <button 
@@ -266,18 +334,67 @@ const App: React.FC = () => {
         )}
 
         {selectedNote ? (
-          <Editor 
-            note={selectedNote} 
-            onUpdate={handleUpdateNote} 
-          />
+          <Editor note={selectedNote} onUpdate={handleUpdateNote} />
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center text-slate-300 bg-slate-50/50">
             <Icon name="FileText" size={64} className="mb-4 text-slate-200" />
             <p className="text-lg font-medium text-slate-400">Select a note to view or edit</p>
-            <p className="text-sm mt-2">or create a new notebook from the sidebar</p>
           </div>
         )}
       </main>
+
+      {/* Settings Modal */}
+      {showSettings && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+            <div className="bg-white rounded-lg shadow-2xl w-full max-w-md overflow-hidden">
+                <div className="p-4 border-b border-slate-100 flex justify-between items-center">
+                    <h2 className="font-bold text-lg text-slate-800 flex items-center gap-2">
+                        <Icon name="Settings" className="text-slate-500" /> Storage Settings
+                    </h2>
+                    <button onClick={() => setShowSettings(false)} className="text-slate-400 hover:text-slate-600">
+                        <Icon name="X" size={20} />
+                    </button>
+                </div>
+                <div className="p-6 space-y-4">
+                    <div className="bg-blue-50 text-blue-800 p-3 rounded-md text-sm">
+                        Configure a backend API to sync your notes across devices. 
+                        Leave blank to use this device's local storage only.
+                    </div>
+                    
+                    <div className="space-y-2">
+                        <label className="block text-sm font-medium text-slate-700">Backend API URL</label>
+                        <input 
+                            type="text" 
+                            placeholder="https://api.example.com/notes"
+                            className="w-full p-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                            defaultValue={config.apiUrl}
+                            id="apiUrlInput"
+                        />
+                        <p className="text-xs text-slate-500">Must support GET (load) and POST (save) for JSON array of notes.</p>
+                    </div>
+                    
+                    <div className="space-y-2">
+                        <label className="block text-sm font-medium text-slate-700">API Key (Optional)</label>
+                        <input 
+                            type="password" 
+                            placeholder="Bearer Token / Key"
+                            className="w-full p-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                            defaultValue={config.apiKey}
+                            id="apiKeyInput"
+                        />
+                    </div>
+                </div>
+                <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end gap-2">
+                    <Button variant="ghost" onClick={() => setShowSettings(false)}>Cancel</Button>
+                    <Button onClick={() => {
+                        const apiUrl = (document.getElementById('apiUrlInput') as HTMLInputElement).value;
+                        const apiKey = (document.getElementById('apiKeyInput') as HTMLInputElement).value;
+                        handleSaveConfig({ apiUrl, apiKey });
+                    }}>Save Configuration</Button>
+                </div>
+            </div>
+        </div>
+      )}
     </div>
   );
 };
