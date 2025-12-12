@@ -283,8 +283,8 @@ const App: React.FC = () => {
                 
                 <span className={`${syncStatus === 'error' ? 'text-red-500' : 'text-slate-500'}`}>
                   {syncStatus === 'syncing' && 'Syncing...'}
-                  {syncStatus === 'saved' && 'All changes saved'}
-                  {syncStatus === 'error' && 'Sync failed (Saved locally)'}
+                  {syncStatus === 'saved' && 'Saved'}
+                  {syncStatus === 'error' && 'Sync failed'}
                   {syncStatus === 'idle' && 'Offline'}
                 </span>
              </div>
@@ -346,7 +346,7 @@ const App: React.FC = () => {
       {/* Settings Modal */}
       {showSettings && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-            <div className="bg-white rounded-lg shadow-2xl w-full max-w-md overflow-hidden">
+            <div className="bg-white rounded-lg shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200">
                 <div className="p-4 border-b border-slate-100 flex justify-between items-center">
                     <h2 className="font-bold text-lg text-slate-800 flex items-center gap-2">
                         <Icon name="Settings" className="text-slate-500" /> Storage Settings
@@ -356,28 +356,30 @@ const App: React.FC = () => {
                     </button>
                 </div>
                 <div className="p-6 space-y-4">
-                    <div className="bg-blue-50 text-blue-800 p-3 rounded-md text-sm">
-                        Configure a backend API to sync your notes across devices. 
-                        Leave blank to use this device's local storage only.
+                    <div className="bg-blue-50 text-blue-800 p-3 rounded-md text-sm border border-blue-100">
+                        <strong>Recommended Free Option:</strong>
+                        <p className="mt-1">
+                           Use <a href="https://jsonbin.io" target="_blank" className="underline font-bold">JSONBin.io</a>. 
+                           Create a bin with <code>[]</code>, then paste the <strong>Bin URL</strong> and <strong>Master Key</strong> below.
+                        </p>
                     </div>
                     
                     <div className="space-y-2">
                         <label className="block text-sm font-medium text-slate-700">Backend API URL</label>
                         <input 
                             type="text" 
-                            placeholder="https://api.example.com/notes"
+                            placeholder="https://api.jsonbin.io/v3/b/..."
                             className="w-full p-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                             defaultValue={config.apiUrl}
                             id="apiUrlInput"
                         />
-                        <p className="text-xs text-slate-500">Must support GET (load) and POST (save) for JSON array of notes.</p>
                     </div>
                     
                     <div className="space-y-2">
-                        <label className="block text-sm font-medium text-slate-700">API Key (Optional)</label>
+                        <label className="block text-sm font-medium text-slate-700">API Key (Bearer Token or Master Key)</label>
                         <input 
                             type="password" 
-                            placeholder="Bearer Token / Key"
+                            placeholder="Key..."
                             className="w-full p-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                             defaultValue={config.apiKey}
                             id="apiKeyInput"
