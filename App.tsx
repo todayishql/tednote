@@ -46,6 +46,7 @@ const App: React.FC = () => {
     return saved ? JSON.parse(saved) : { apiUrl: '', apiKey: '' };
   });
   const [showSettings, setShowSettings] = useState(false);
+  const [showCloudPullDialog, setShowCloudPullDialog] = useState(false);
 
   // Data State
   const [notes, setNotes] = useState<Note[]>(INITIAL_NOTES);
@@ -65,12 +66,13 @@ const App: React.FC = () => {
   const [showLockSetup, setShowLockSetup] = useState(false);
   const [lockPasswordInput, setLockPasswordInput] = useState('');
 
-  // Initial Load
+  // Initial Load - Local Only
   useEffect(() => {
     const initLoad = async () => {
       setIsLoading(true);
       try {
-        const loadedNotes = await storage.load(config);
+        // Load ONLY from local storage cache initially to save API calls
+        const loadedNotes = await storage.loadLocal();
         if (loadedNotes) {
           setNotes(loadedNotes);
           if (loadedNotes.length > 0 && !selectedNoteId) {
@@ -80,7 +82,12 @@ const App: React.FC = () => {
              // Fallback to initial if nothing loaded anywhere
              setSelectedNoteId(INITIAL_NOTES[0].id);
         }
-        // Data just loaded, so no unsaved changes
+        
+        // If API is configured, prompt user to connect/download
+        if (config.apiUrl) {
+            setShowCloudPullDialog(true);
+        }
+
         setHasUnsavedChanges(false);
       } catch (e) {
         console.error("Load failed", e);
@@ -90,7 +97,7 @@ const App: React.FC = () => {
       }
     };
     initLoad();
-  }, [config.apiUrl]);
+  }, []); // Run once on mount
 
   // Local Auto-Save (Always active for safety, does NOT hit API)
   useEffect(() => {
@@ -98,7 +105,7 @@ const App: React.FC = () => {
     localStorage.setItem('texnote-notes', JSON.stringify(notes));
   }, [notes, isLoading]);
 
-  // Manual Cloud Save
+  // Cloud Actions
   const handleManualSave = async () => {
     if (!config.apiUrl) return;
     
@@ -117,13 +124,45 @@ const App: React.FC = () => {
     }
   };
 
+  const handleCloudPull = async () => {
+    if (!config.apiUrl) return;
+
+    setSyncStatus('syncing');
+    setErrorMessage(null);
+    
+    try {
+        const loaded = await storage.loadRemote(config);
+        if (loaded) {
+            if (loaded.length > 0) {
+                 setNotes(loaded);
+                 // Try to keep selected note if it exists, else select first
+                 if (!loaded.find(n => n.id === selectedNoteId)) {
+                     setSelectedNoteId(loaded[0].id);
+                 }
+            } else {
+                 setNotes([]);
+                 setSelectedNoteId(null);
+            }
+            setSyncStatus('saved');
+            setHasUnsavedChanges(false);
+            setLastSynced(Date.now());
+        }
+        setShowCloudPullDialog(false);
+    } catch (e) {
+        console.error(e);
+        setSyncStatus('error');
+        setErrorMessage("Download failed.");
+    }
+  };
+
 
   // Update config wrapper
   const handleSaveConfig = (newConfig: StorageConfig) => {
     setConfig(newConfig);
     localStorage.setItem('texnote-config', JSON.stringify(newConfig));
     setShowSettings(false);
-    // Trigger a reload or just let the next save use new config
+    // If setting up API for the first time, maybe prompt to pull?
+    if (newConfig.apiUrl) setShowCloudPullDialog(true);
   };
 
   // Convert flat list to tree
@@ -354,18 +393,30 @@ const App: React.FC = () => {
              )}
           </div>
 
-          {/* Manual Save Button (Only if API Configured) */}
+          {/* Cloud Actions (Only if API Configured) */}
           {config.apiUrl && (
-            <Button 
-                onClick={handleManualSave} 
-                variant={hasUnsavedChanges ? 'primary' : 'secondary'}
-                className="w-full flex items-center justify-center gap-2 mb-1"
-                disabled={syncStatus === 'syncing'}
-            >
-                <Icon name="Save" size={14} />
-                {syncStatus === 'syncing' ? 'Saving...' : 'Save to Cloud'}
-                {hasUnsavedChanges && <span className="w-2 h-2 rounded-full bg-white ml-1 animate-pulse" />}
-            </Button>
+            <div className="flex gap-2 mb-1">
+                <Button 
+                    onClick={handleManualSave} 
+                    variant={hasUnsavedChanges ? 'primary' : 'secondary'}
+                    className="flex-1 flex items-center justify-center gap-2"
+                    disabled={syncStatus === 'syncing'}
+                    title="Save to Cloud"
+                >
+                    <Icon name="Save" size={14} />
+                    {syncStatus === 'syncing' ? 'Saving...' : 'Save'}
+                    {hasUnsavedChanges && <span className="w-1.5 h-1.5 rounded-full bg-white ml-0.5 animate-pulse" />}
+                </Button>
+                <Button 
+                    onClick={handleCloudPull} 
+                    variant="secondary"
+                    className="flex-0 px-3"
+                    disabled={syncStatus === 'syncing'}
+                    title="Pull from Cloud (Overwrite Local)"
+                >
+                    <Icon name="CloudDownload" size={16} />
+                </Button>
+            </div>
           )}
 
           {/* Import/Export */}
@@ -454,6 +505,39 @@ const App: React.FC = () => {
           </div>
         )}
       </main>
+
+      {/* Cloud Pull Dialog */}
+      {showCloudPullDialog && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+            <div className="bg-white rounded-lg shadow-2xl w-full max-w-sm overflow-hidden animate-in fade-in zoom-in duration-200">
+                <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-indigo-50">
+                    <h2 className="font-bold text-lg text-indigo-900 flex items-center gap-2">
+                        <Icon name="Cloud" className="text-indigo-600" /> Cloud Sync
+                    </h2>
+                    <button onClick={() => setShowCloudPullDialog(false)} className="text-indigo-400 hover:text-indigo-600">
+                        <Icon name="X" size={20} />
+                    </button>
+                </div>
+                <div className="p-6">
+                    <p className="text-slate-600 mb-6 leading-relaxed">
+                        Cloud configuration detected. Do you want to download the latest notes from the cloud?
+                        <br/><br/>
+                        <span className="text-xs text-slate-500 block bg-slate-100 p-2 rounded">
+                            <span className="font-bold text-amber-600">Warning:</span> This will overwrite your current local session.
+                        </span>
+                    </p>
+                    <div className="flex flex-col gap-2">
+                        <Button onClick={handleCloudPull} className="w-full flex items-center justify-center gap-2">
+                            <Icon name="CloudDownload" size={16} /> Download from Cloud
+                        </Button>
+                        <Button variant="secondary" onClick={() => setShowCloudPullDialog(false)} className="w-full">
+                            Use Local Cache
+                        </Button>
+                    </div>
+                </div>
+            </div>
+          </div>
+      )}
 
       {/* Lock Setup Modal */}
       {showLockSetup && (
