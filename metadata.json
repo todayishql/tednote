@@ -1,0 +1,5 @@
+{
+  "name": "TexNote Pro",
+  "description": "A hierarchical notebook application with first-class LaTeX support for scientific and mathematical note-taking.",
+  "requestFramePermissions": []
+}
