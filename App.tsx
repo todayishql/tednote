@@ -53,6 +53,7 @@ const App: React.FC = () => {
   
   // Sync Status State
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle');
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [lastSynced, setLastSynced] = useState<number | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -74,39 +75,42 @@ const App: React.FC = () => {
              // Fallback to initial if nothing loaded anywhere
              setSelectedNoteId(INITIAL_NOTES[0].id);
         }
+        // Data just loaded, so no unsaved changes
+        setHasUnsavedChanges(false);
       } catch (e) {
         console.error("Load failed", e);
-        // Even if backend fails, we might have local data from storage.load fallback, 
-        // but if that fails too, we keep INITIAL_NOTES
-        setErrorMessage("Failed to load notes from backend. Using offline mode.");
+        setErrorMessage("Failed to load notes. Using offline mode.");
       } finally {
         setIsLoading(false);
       }
     };
     initLoad();
-  }, [config.apiUrl]); // Reload if API URL changes
+  }, [config.apiUrl]);
 
-  // Save / Sync Logic (Debounced)
+  // Local Auto-Save (Always active for safety, does NOT hit API)
   useEffect(() => {
-    if (isLoading) return; // Don't save while initial loading
+    if (isLoading) return;
+    localStorage.setItem('texnote-notes', JSON.stringify(notes));
+  }, [notes, isLoading]);
 
+  // Manual Cloud Save
+  const handleManualSave = async () => {
+    if (!config.apiUrl) return;
+    
     setSyncStatus('syncing');
     setErrorMessage(null);
-
-    const timer = setTimeout(async () => {
-      try {
-        await storage.save(notes, config);
-        setSyncStatus('saved');
-        setLastSynced(Date.now());
-      } catch (e) {
-        console.error(e);
-        setSyncStatus('error');
-        setErrorMessage("Sync failed. Data saved locally.");
-      }
-    }, 1000); // 1 second debounce
-
-    return () => clearTimeout(timer);
-  }, [notes, config, isLoading]);
+    
+    try {
+      await storage.save(notes, config);
+      setSyncStatus('saved');
+      setHasUnsavedChanges(false);
+      setLastSynced(Date.now());
+    } catch (e) {
+      console.error(e);
+      setSyncStatus('error');
+      setErrorMessage("Save failed. Check API settings.");
+    }
+  };
 
 
   // Update config wrapper
@@ -114,6 +118,7 @@ const App: React.FC = () => {
     setConfig(newConfig);
     localStorage.setItem('texnote-config', JSON.stringify(newConfig));
     setShowSettings(false);
+    // Trigger a reload or just let the next save use new config
   };
 
   // Convert flat list to tree
@@ -155,12 +160,14 @@ const App: React.FC = () => {
       ));
     }
     setSelectedNoteId(newNote.id);
+    setHasUnsavedChanges(true);
   };
 
   const handleUpdateNote = (id: string, updates: Partial<Note>) => {
     setNotes(prev => prev.map(note => 
       note.id === id ? { ...note, ...updates, updatedAt: Date.now() } : note
     ));
+    setHasUnsavedChanges(true);
   };
 
   const handleDeleteNote = (id: string) => {
@@ -173,12 +180,14 @@ const App: React.FC = () => {
     if (selectedNoteId && idsToDelete.has(selectedNoteId)) {
       setSelectedNoteId(null);
     }
+    setHasUnsavedChanges(true);
   };
 
   const handleToggleExpand = (id: string) => {
     setNotes(prev => prev.map(n => 
       n.id === id ? { ...n, isExpanded: !n.isExpanded } : n
     ));
+    setHasUnsavedChanges(true); // View state changes also worth saving
   };
 
   // --- Import / Export Handlers ---
@@ -207,6 +216,7 @@ const App: React.FC = () => {
             if (window.confirm(`Overwrite ${notes.length} notes with backup?`)) {
                 setNotes(parsed);
                 setSelectedNoteId(parsed[0].id);
+                setHasUnsavedChanges(true); // Mark imported data as unsaved to cloud
             }
         } else {
             alert("Invalid backup file.");
@@ -272,27 +282,45 @@ const App: React.FC = () => {
         </div>
         
         {/* Footer */}
-        <div className="p-3 border-t border-slate-200 bg-slate-50/50 flex flex-col gap-3">
-          {/* Sync Status Indicator */}
-          <div className="flex items-center justify-between text-xs px-1">
+        <div className="p-3 border-t border-slate-200 bg-slate-50/50 flex flex-col gap-2">
+          
+          {/* Status Line */}
+          <div className="flex items-center justify-between text-xs px-1 mb-1">
              <div className="flex items-center gap-1.5">
                 {syncStatus === 'syncing' && <Icon name="Loader2" className="animate-spin text-indigo-500" size={12} />}
-                {syncStatus === 'saved' && <Icon name="CheckCircle" className="text-green-500" size={12} />}
                 {syncStatus === 'error' && <Icon name="AlertCircle" className="text-red-500" size={12} />}
-                {syncStatus === 'idle' && <Icon name="Cloud" className="text-slate-400" size={12} />}
+                {syncStatus === 'saved' && !hasUnsavedChanges && <Icon name="CheckCircle" className="text-green-500" size={12} />}
+                {!config.apiUrl && <Icon name="Cloud" className="text-slate-400" size={12} />}
                 
                 <span className={`${syncStatus === 'error' ? 'text-red-500' : 'text-slate-500'}`}>
-                  {syncStatus === 'syncing' && 'Syncing...'}
-                  {syncStatus === 'saved' && 'Saved'}
-                  {syncStatus === 'error' && 'Sync failed'}
-                  {syncStatus === 'idle' && 'Offline'}
+                   {syncStatus === 'syncing' ? 'Syncing...' : 
+                    syncStatus === 'error' ? 'Sync Failed' :
+                    !config.apiUrl ? 'Local Mode' :
+                    hasUnsavedChanges ? 'Unsaved changes' : 'All saved'}
                 </span>
              </div>
              {config.apiUrl && (
-                 <span className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">Backend Active</span>
+                 <span className="text-[10px] text-slate-400 font-mono">
+                    {notes.reduce((acc, n) => acc + n.content.length, 0) / 1000 < 1 ? '<1KB' : Math.round(notes.reduce((acc, n) => acc + n.content.length, 0) / 1024) + 'KB'}
+                 </span>
              )}
           </div>
 
+          {/* Manual Save Button (Only if API Configured) */}
+          {config.apiUrl && (
+            <Button 
+                onClick={handleManualSave} 
+                variant={hasUnsavedChanges ? 'primary' : 'secondary'}
+                className="w-full flex items-center justify-center gap-2 mb-1"
+                disabled={syncStatus === 'syncing'}
+            >
+                <Icon name="Save" size={14} />
+                {syncStatus === 'syncing' ? 'Saving...' : 'Save to Cloud'}
+                {hasUnsavedChanges && <span className="w-2 h-2 rounded-full bg-white ml-1 animate-pulse" />}
+            </Button>
+          )}
+
+          {/* Import/Export */}
           <div className="flex gap-2">
             <Button variant="secondary" size="sm" className="flex-1 h-8 text-xs" onClick={handleExport} title="Download backup file">
               <Icon name="Download" size={14} className="mr-2" /> Export
