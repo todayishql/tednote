@@ -8,9 +8,15 @@ export interface StorageConfig {
 }
 
 export const storage = {
-  // Load notes from backend if configured, otherwise local storage
-  async load(config: StorageConfig): Promise<Note[] | null> {
-    if (config.apiUrl) {
+  // Load notes strictly from local storage (cache)
+  async loadLocal(): Promise<Note[] | null> {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    return saved ? JSON.parse(saved) : null;
+  },
+
+  // Load notes from backend explicitly
+  async loadRemote(config: StorageConfig): Promise<Note[] | null> {
+    if (!config.apiUrl) return null;
       try {
         const isJsonBin = config.apiUrl.includes('jsonbin.io');
         
@@ -29,27 +35,24 @@ export const storage = {
         
         const data = await response.json();
         
+        let notes = data;
         // JSONBin wraps the data in a 'record' property
         if (isJsonBin && data.record && Array.isArray(data.record)) {
-            const notes = data.record;
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(notes));
-            return notes;
+            notes = data.record;
+        } else if (!Array.isArray(data)) {
+             // If it's not an array, maybe it's the wrapper from a generic bin
+             // But for now, assume array or fail
+             if (data && Array.isArray(data.record)) notes = data.record; // Fallback
+             else throw new Error("Backend response is not an array of notes");
         }
 
-        // Generic API handling
-        if (!Array.isArray(data)) throw new Error("Backend response is not an array of notes");
-        
         // Update local cache
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-        return data;
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(notes));
+        return notes;
       } catch (e) {
         console.error('Backend load failed:', e);
         throw e;
       }
-    } else {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      return saved ? JSON.parse(saved) : null;
-    }
   },
 
   // Save notes to backend if configured, AND always save to local storage
