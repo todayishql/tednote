@@ -60,6 +60,11 @@ const App: React.FC = () => {
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
+  // Locking State
+  const [unlockedSessionIds, setUnlockedSessionIds] = useState<Set<string>>(new Set());
+  const [showLockSetup, setShowLockSetup] = useState(false);
+  const [lockPasswordInput, setLockPasswordInput] = useState('');
+
   // Initial Load
   useEffect(() => {
     const initLoad = async () => {
@@ -190,6 +195,43 @@ const App: React.FC = () => {
     setHasUnsavedChanges(true); // View state changes also worth saving
   };
 
+  // --- Lock / Unlock Logic ---
+
+  const handleLockSetup = (password: string) => {
+    if (!selectedNoteId) return;
+    
+    setNotes(prev => prev.map(n => 
+        n.id === selectedNoteId 
+        ? { ...n, isLocked: true, password, updatedAt: Date.now() } 
+        : n
+    ));
+    
+    // Automatically unlock for current session so user doesn't have to enter it immediately
+    setUnlockedSessionIds(prev => new Set(prev).add(selectedNoteId));
+    setHasUnsavedChanges(true);
+    setShowLockSetup(false);
+  };
+
+  const handleRemoveLock = () => {
+      if (!selectedNoteId) return;
+      if (confirm("Remove password protection from this note?")) {
+        setNotes(prev => prev.map(n => 
+            n.id === selectedNoteId 
+            ? { ...n, isLocked: false, password: undefined, updatedAt: Date.now() } 
+            : n
+        ));
+        setHasUnsavedChanges(true);
+      }
+  };
+
+  const checkUnlock = (password: string) => {
+      if (selectedNote && selectedNote.password === password) {
+          setUnlockedSessionIds(prev => new Set(prev).add(selectedNote.id));
+      } else {
+          alert("Incorrect password");
+      }
+  };
+
   // --- Import / Export Handlers ---
   const handleExport = () => {
     const dataStr = JSON.stringify(notes, null, 2);
@@ -229,6 +271,11 @@ const App: React.FC = () => {
     reader.readAsText(file);
     event.target.value = '';
   };
+
+  // --- Render Logic for Main Content ---
+  const isLocked = selectedNote?.isLocked;
+  const isUnlockedInSession = selectedNoteId && unlockedSessionIds.has(selectedNoteId);
+  const showContent = !isLocked || isUnlockedInSession;
 
   return (
     <div className="flex h-screen w-screen bg-slate-50 overflow-hidden text-slate-900 font-sans">
@@ -272,6 +319,7 @@ const App: React.FC = () => {
                 key={item.id}
                 item={item}
                 selectedId={selectedNoteId}
+                unlockedIds={unlockedSessionIds}
                 onSelect={setSelectedNoteId}
                 onToggleExpand={handleToggleExpand}
                 onAddChild={handleCreateNote}
@@ -362,7 +410,43 @@ const App: React.FC = () => {
         )}
 
         {selectedNote ? (
-          <Editor note={selectedNote} onUpdate={handleUpdateNote} />
+          showContent ? (
+            <Editor 
+                note={selectedNote} 
+                onUpdate={handleUpdateNote} 
+                onLockAction={() => {
+                    if (selectedNote.isLocked) {
+                        handleRemoveLock();
+                    } else {
+                        setLockPasswordInput('');
+                        setShowLockSetup(true);
+                    }
+                }}
+            />
+          ) : (
+            // Locked Screen
+            <div className="flex-1 flex flex-col items-center justify-center bg-slate-50/50 p-6">
+                <div className="bg-white p-8 rounded-xl shadow-lg w-full max-w-sm text-center border border-slate-200">
+                    <div className="bg-amber-100 p-4 rounded-full inline-flex mb-4">
+                        <Icon name="Lock" size={32} className="text-amber-600" />
+                    </div>
+                    <h2 className="text-2xl font-bold text-slate-800 mb-2">Note Locked</h2>
+                    <p className="text-slate-500 mb-6">Enter password to view this content</p>
+                    
+                    <form onSubmit={(e) => { e.preventDefault(); checkUnlock(lockPasswordInput); }}>
+                        <input 
+                            type="password" 
+                            className="w-full p-3 border border-slate-300 rounded-lg mb-4 focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                            placeholder="Password"
+                            value={lockPasswordInput}
+                            onChange={(e) => setLockPasswordInput(e.target.value)}
+                            autoFocus
+                        />
+                        <Button className="w-full" type="submit">Unlock</Button>
+                    </form>
+                </div>
+            </div>
+          )
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center text-slate-300 bg-slate-50/50">
             <Icon name="FileText" size={64} className="mb-4 text-slate-200" />
@@ -370,6 +454,41 @@ const App: React.FC = () => {
           </div>
         )}
       </main>
+
+      {/* Lock Setup Modal */}
+      {showLockSetup && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+            <div className="bg-white rounded-lg shadow-2xl w-full max-w-sm overflow-hidden animate-in fade-in zoom-in duration-200">
+                <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-indigo-50">
+                    <h2 className="font-bold text-lg text-indigo-900 flex items-center gap-2">
+                        <Icon name="Lock" className="text-indigo-600" /> Set Password
+                    </h2>
+                    <button onClick={() => setShowLockSetup(false)} className="text-indigo-400 hover:text-indigo-600">
+                        <Icon name="X" size={20} />
+                    </button>
+                </div>
+                <div className="p-6">
+                    <p className="text-sm text-slate-600 mb-4">
+                        This password will be saved in the notebook file.
+                    </p>
+                    <form onSubmit={(e) => { e.preventDefault(); handleLockSetup(lockPasswordInput); }}>
+                        <input 
+                            type="password" 
+                            placeholder="Enter new password"
+                            className="w-full p-3 border border-slate-300 rounded-md focus:ring-2 focus:ring-indigo-500 focus:outline-none mb-4"
+                            value={lockPasswordInput}
+                            onChange={(e) => setLockPasswordInput(e.target.value)}
+                            autoFocus
+                        />
+                        <div className="flex justify-end gap-2">
+                            <Button type="button" variant="ghost" onClick={() => setShowLockSetup(false)}>Cancel</Button>
+                            <Button type="submit" disabled={!lockPasswordInput}>Lock Note</Button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+      )}
 
       {/* Settings Modal */}
       {showSettings && (
