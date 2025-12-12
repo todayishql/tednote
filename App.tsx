@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Note, NoteTreeItem } from './types';
 import { SidebarItem } from './components/SidebarItem';
 import { Editor } from './components/Editor';
@@ -49,6 +49,7 @@ const App: React.FC = () => {
   
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(notes[0]?.id || null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Persist to local storage
   useEffect(() => {
@@ -131,6 +132,48 @@ const App: React.FC = () => {
     ));
   };
 
+  // --- Import / Export ---
+
+  const handleExport = () => {
+    const dataStr = JSON.stringify(notes, null, 2);
+    const blob = new Blob([dataStr], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.download = `texnote-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    link.href = url;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImport = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const content = e.target?.result as string;
+        const parsed = JSON.parse(content);
+        if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].id && parsed[0].content !== undefined) {
+            if (window.confirm(`This will overwrite your current ${notes.length} notes with ${parsed.length} notes from the backup. Are you sure?`)) {
+                setNotes(parsed);
+                setSelectedNoteId(parsed[0].id);
+            }
+        } else {
+            alert("Invalid backup file format. Expected a list of notes.");
+        }
+      } catch (err) {
+        console.error(err);
+        alert("Failed to parse backup file.");
+      }
+    };
+    reader.readAsText(file);
+    // Reset value so same file can be selected again
+    event.target.value = '';
+  };
+
   return (
     <div className="flex h-screen w-screen bg-slate-50 overflow-hidden text-slate-900 font-sans">
       
@@ -172,8 +215,30 @@ const App: React.FC = () => {
           )}
         </div>
         
-        <div className="p-3 border-t border-slate-200 text-xs text-slate-400 text-center">
-          {notes.length} notes stored
+        {/* Storage / Footer */}
+        <div className="p-4 border-t border-slate-200 bg-slate-50/50">
+          <div className="flex items-center justify-between mb-2">
+             <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Backup & Restore</span>
+             <span className="text-xs text-slate-400">{notes.length} notes</span>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="secondary" size="sm" className="flex-1 h-8 text-xs" onClick={handleExport} title="Download backup file">
+              <Icon name="Download" size={14} className="mr-2" /> Export
+            </Button>
+            
+            <div className="relative flex-1">
+                <input 
+                    type="file" 
+                    accept=".json" 
+                    onChange={handleImport}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                    title="Upload backup file"
+                />
+                <Button variant="secondary" size="sm" className="w-full h-8 text-xs pointer-events-none">
+                    <Icon name="Upload" size={14} className="mr-2" /> Import
+                </Button>
+            </div>
+          </div>
         </div>
       </aside>
 
