@@ -1,8 +1,9 @@
 import React from 'react';
 import * as Lucide from 'lucide-react';
 
-interface IconProps extends Lucide.LucideProps {
+interface IconProps extends Omit<React.SVGProps<SVGSVGElement>, 'name'> {
   name: keyof typeof Lucide;
+  size?: string | number;
 }
 
 export const Icon: React.FC<IconProps> = ({ name, ...props }) => {
