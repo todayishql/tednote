@@ -6,6 +6,7 @@ import { Button } from './Button';
 interface SidebarItemProps {
   item: NoteTreeItem;
   selectedId: string | null;
+  unlockedIds: Set<string>;
   onSelect: (id: string) => void;
   onToggleExpand: (id: string) => void;
   onAddChild: (parentId: string) => void;
@@ -15,6 +16,7 @@ interface SidebarItemProps {
 export const SidebarItem: React.FC<SidebarItemProps> = ({
   item,
   selectedId,
+  unlockedIds,
   onSelect,
   onToggleExpand,
   onAddChild,
@@ -22,10 +24,21 @@ export const SidebarItem: React.FC<SidebarItemProps> = ({
 }) => {
   const isSelected = selectedId === item.id;
   const hasChildren = item.children.length > 0;
+  
+  // A note is visible (unlocked for viewing details) if it is NOT locked OR it is in the unlocked set
+  const isUnlocked = !item.isLocked || unlockedIds.has(item.id);
+
+  // Only show children if expanded AND unlocked
+  const showChildren = item.isExpanded && hasChildren && isUnlocked;
 
   const handleExpandClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    onToggleExpand(item.id);
+    if (!isUnlocked) {
+        // If locked, clicking chevron selects it to prompt password
+        onSelect(item.id);
+    } else {
+        onToggleExpand(item.id);
+    }
   };
 
   const handleAddClick = (e: React.MouseEvent) => {
@@ -55,30 +68,36 @@ export const SidebarItem: React.FC<SidebarItemProps> = ({
           onClick={handleExpandClick}
         >
           <Icon 
-            name={item.isExpanded ? 'ChevronDown' : 'ChevronRight'} 
+            name={item.isExpanded && isUnlocked ? 'ChevronDown' : 'ChevronRight'} 
             size={14} 
-            className="text-slate-400"
+            className={!isUnlocked && item.children.length > 0 ? "text-slate-300" : "text-slate-400"}
           />
         </div>
         
-        <Icon 
-          name={hasChildren ? (item.isExpanded ? 'FolderOpen' : 'Folder') : 'FileText'} 
-          size={16} 
-          className={isSelected ? 'text-indigo-600' : 'text-slate-400'} 
-        />
+        {item.isLocked ? (
+          <Icon name="Lock" size={14} className={isUnlocked ? "text-slate-400" : "text-amber-500"} />
+        ) : (
+          <Icon 
+            name={hasChildren ? (item.isExpanded && isUnlocked ? 'FolderOpen' : 'Folder') : 'FileText'} 
+            size={16} 
+            className={isSelected ? 'text-indigo-600' : 'text-slate-400'} 
+          />
+        )}
         
         <span className="truncate flex-1">{item.title || 'Untitled Note'}</span>
 
         <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6 text-slate-400 hover:text-indigo-600"
-            onClick={handleAddClick}
-            title="Add Child Page"
-          >
-            <Icon name="Plus" size={12} />
-          </Button>
+          {isUnlocked && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 text-slate-400 hover:text-indigo-600"
+                onClick={handleAddClick}
+                title="Add Child Page"
+              >
+                <Icon name="Plus" size={12} />
+              </Button>
+          )}
           <Button
             variant="ghost"
             size="icon"
@@ -91,13 +110,14 @@ export const SidebarItem: React.FC<SidebarItemProps> = ({
         </div>
       </div>
 
-      {item.isExpanded && item.children.length > 0 && (
+      {showChildren && (
         <div>
           {item.children.map((child) => (
             <SidebarItem
               key={child.id}
               item={child}
               selectedId={selectedId}
+              unlockedIds={unlockedIds}
               onSelect={onSelect}
               onToggleExpand={onToggleExpand}
               onAddChild={onAddChild}
