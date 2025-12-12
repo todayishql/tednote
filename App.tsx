@@ -38,8 +38,13 @@ const INITIAL_NOTES: Note[] = [
 
 const App: React.FC = () => {
   const [notes, setNotes] = useState<Note[]>(() => {
-    const saved = localStorage.getItem('texnote-notes');
-    return saved ? JSON.parse(saved) : INITIAL_NOTES;
+    try {
+      const saved = localStorage.getItem('texnote-notes');
+      return saved ? JSON.parse(saved) : INITIAL_NOTES;
+    } catch (e) {
+      console.error("Failed to parse notes from local storage", e);
+      return INITIAL_NOTES;
+    }
   });
   
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(notes[0]?.id || null);
@@ -47,7 +52,11 @@ const App: React.FC = () => {
 
   // Persist to local storage
   useEffect(() => {
-    localStorage.setItem('texnote-notes', JSON.stringify(notes));
+    try {
+      localStorage.setItem('texnote-notes', JSON.stringify(notes));
+    } catch (e) {
+      console.error("Failed to save notes", e);
+    }
   }, [notes]);
 
   // Convert flat list to tree
